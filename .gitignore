@@ -1,2 +1,12 @@
+# Node
 node_modules/
-build/
+
+# Env
+.env
+
+# Hardhat
+artifacts
+cache
+
+# Typechain
+typechain-types

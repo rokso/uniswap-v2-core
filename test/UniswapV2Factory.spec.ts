@@ -1,58 +1,55 @@
-import chai, { expect } from 'chai'
-import { Contract } from 'ethers'
-import { AddressZero } from 'ethers/constants'
-import { bigNumberify } from 'ethers/utils'
-import { solidity, MockProvider, createFixtureLoader } from 'ethereum-waffle'
-
+import hre, { ethers } from 'hardhat'
+import { expect } from 'chai'
+import { SignerWithAddress } from '@nomicfoundation/hardhat-ethers/signers'
+import { setCode } from '@nomicfoundation/hardhat-network-helpers'
+import { ZeroAddress, Contract } from 'ethers'
+import { UniswapV2Factory } from '../typechain-types'
 import { getCreate2Address } from './shared/utilities'
-import { factoryFixture } from './shared/fixtures'
-
-import UniswapV2Pair from '../build/UniswapV2Pair.json'
-
-chai.use(solidity)
+import UniswapV2Pair from '../artifacts/contracts/UniswapV2Pair.sol/UniswapV2Pair.json'
 
 const TEST_ADDRESSES: [string, string] = [
   '0x1000000000000000000000000000000000000000',
-  '0x2000000000000000000000000000000000000000'
+  '0x2000000000000000000000000000000000000000',
 ]
 
-describe('UniswapV2Factory', () => {
-  const provider = new MockProvider({
-    hardfork: 'istanbul',
-    mnemonic: 'horn horn horn horn horn horn horn horn horn horn horn horn',
-    gasLimit: 9999999
-  })
-  const [wallet, other] = provider.getWallets()
-  const loadFixture = createFixtureLoader(provider, [wallet, other])
+describe('UniswapV2Factory', async () => {
+  let wallet: SignerWithAddress, other: SignerWithAddress
 
-  let factory: Contract
+  let factory: UniswapV2Factory
+
+  before(async () => {
+    ;[wallet, other] = await ethers.getSigners()
+  })
+
   beforeEach(async () => {
-    const fixture = await loadFixture(factoryFixture)
-    factory = fixture.factory
+    factory = (await (await ethers.getContractFactory('UniswapV2Factory')).deploy(wallet.address)) as UniswapV2Factory
   })
 
   it('feeTo, feeToSetter, allPairsLength', async () => {
-    expect(await factory.feeTo()).to.eq(AddressZero)
+    expect(await factory.feeTo()).to.eq(ZeroAddress)
     expect(await factory.feeToSetter()).to.eq(wallet.address)
     expect(await factory.allPairsLength()).to.eq(0)
   })
 
   async function createPair(tokens: [string, string]) {
-    const bytecode = `0x${UniswapV2Pair.evm.bytecode.object}`
-    const create2Address = getCreate2Address(factory.address, tokens, bytecode)
+    const bytecode = UniswapV2Pair.bytecode
+    const factoryAddress = await factory.getAddress()
+    const create2Address = getCreate2Address(factoryAddress, tokens, bytecode)
     await expect(factory.createPair(...tokens))
       .to.emit(factory, 'PairCreated')
-      .withArgs(TEST_ADDRESSES[0], TEST_ADDRESSES[1], create2Address, bigNumberify(1))
+      .withArgs(TEST_ADDRESSES[0], TEST_ADDRESSES[1], create2Address, 1)
 
     await expect(factory.createPair(...tokens)).to.be.reverted // UniswapV2: PAIR_EXISTS
-    await expect(factory.createPair(...tokens.slice().reverse())).to.be.reverted // UniswapV2: PAIR_EXISTS
+    await expect(factory.createPair(tokens[1], tokens[0])).to.be.reverted // UniswapV2: PAIR_EXISTS
     expect(await factory.getPair(...tokens)).to.eq(create2Address)
-    expect(await factory.getPair(...tokens.slice().reverse())).to.eq(create2Address)
+    expect(await factory.getPair(tokens[1], tokens[0])).to.eq(create2Address)
     expect(await factory.allPairs(0)).to.eq(create2Address)
     expect(await factory.allPairsLength()).to.eq(1)
 
-    const pair = new Contract(create2Address, JSON.stringify(UniswapV2Pair.abi), provider)
-    expect(await pair.factory()).to.eq(factory.address)
+    await setCode(create2Address, UniswapV2Pair.deployedBytecode)
+    const pair = await ethers.getContractAt('UniswapV2Pair', create2Address)
+
+    expect(await pair.factory()).to.eq(factoryAddress)
     expect(await pair.token0()).to.eq(TEST_ADDRESSES[0])
     expect(await pair.token1()).to.eq(TEST_ADDRESSES[1])
   }
@@ -68,7 +65,7 @@ describe('UniswapV2Factory', () => {
   it('createPair:gas', async () => {
     const tx = await factory.createPair(...TEST_ADDRESSES)
     const receipt = await tx.wait()
-    expect(receipt.gasUsed).to.eq(2512920)
+    expect(receipt?.gasUsed).to.eq(2523648)
   })
 
   it('setFeeTo', async () => {
